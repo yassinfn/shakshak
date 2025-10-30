@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:geoflutterfire_plus/geoflutterfire_plus.dart';
+import 'package:geoflutterfire2/geoflutterfire2.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:audioplayers/audioplayers.dart';
 
@@ -27,22 +27,84 @@ class _DetectionScreenState extends State<DetectionScreen> {
   }
 
   Future<void> _determinePosition() async {
-    // ... (same as before)
+    bool serviceEnabled;
+    LocationPermission permission;
+
+    setState(() {
+      _statusMessage = 'Checking location services...';
+    });
+
+    serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      if (!mounted) return;
+      setState(() {
+        _statusMessage = 'Location services are disabled.';
+        _isLoading = false;
+      });
+      return;
+    }
+
+    permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        if (!mounted) return;
+        setState(() {
+          _statusMessage = 'Location permissions are denied.';
+          _isLoading = false;
+        });
+        return;
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      if (!mounted) return;
+      setState(() {
+        _statusMessage = 'Location permissions are permanently denied.';
+        _isLoading = false;
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _statusMessage = 'Fetching location...';
+    });
+
+    _currentPosition = await Geolocator.getCurrentPosition();
+    
+    if (!mounted) return;
+    setState(() {
+      _statusMessage = 'Searching for nearby messages...';
+      _searchNearbyMessages();
+      _isLoading = false;
+    });
   }
 
   void _searchNearbyMessages() {
-    // ... (same as before)
+    if (_currentPosition == null) return;
+
+    final geo = GeoFlutterFire();
+    final center = geo.point(latitude: _currentPosition!.latitude, longitude: _currentPosition!.longitude);
+    final collectionReference = FirebaseFirestore.instance.collection('messages');
+
+    _nearbyMessagesStream = geo.collection(collectionRef: collectionReference).within(
+          center: center,
+          radius: 5,
+          field: 'position',
+          strictMode: true,
+        );
   }
 
-  void _onMessageTapped(DocumentSnapshot message) {
+
+  Future<void> _onMessageTapped(DocumentSnapshot message) async {
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null || !mounted) return;
 
     final messageData = message.data() as Map<String, dynamic>;
     final messageId = message.id;
     final senderId = messageData['senderId'];
 
-    // Prevent user from getting points from their own messages
     if (user.uid == senderId) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("You can't collect your own message, Agent.")),
@@ -52,49 +114,50 @@ class _DetectionScreenState extends State<DetectionScreen> {
 
     final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
 
-    FirebaseFirestore.instance.runTransaction((transaction) async {
-      final userSnapshot = await transaction.get(userRef);
-      if (!userSnapshot.exists) {
-        throw Exception("User document does not exist!");
-      }
+    try {
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final userSnapshot = await transaction.get(userRef);
+        if (!userSnapshot.exists) {
+          throw Exception("User document does not exist!");
+        }
 
-      final discoveredMessages = List<String>.from(userSnapshot.data()!['discoveredMessages'] ?? []);
-      if (discoveredMessages.contains(messageId)) {
-        // Already discovered
-        return;
-      }
+        final discoveredMessages = List<String>.from(userSnapshot.data()!['discoveredMessages'] ?? []);
+        if (discoveredMessages.contains(messageId)) {
+          return;
+        }
 
-      // Add points and mark as discovered
-      transaction.update(userRef, {
-        'discoveryPoints': FieldValue.increment(10),
-        'discoveredMessages': FieldValue.arrayUnion([messageId]),
+        transaction.update(userRef, {
+          'discoveryPoints': FieldValue.increment(10),
+          'discoveredMessages': FieldValue.arrayUnion([messageId]),
+        });
       });
 
-    }).then((_) {
-      _audioPlayer.play(AssetSource('sounds/success.wav')); // Assuming you have this asset
+      if (!mounted) return;
+      _audioPlayer.play(AssetSource('sounds/success.wav'));
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("+10 Discovery Points!")),
       );
-    }).catchError((error) {
+
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text("From: Agent ${messageData['senderUsername']}"),
+          content: Text(messageData['text']),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            )
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Error: $error")),
       );
-    });
-
-    // You might want to show a dialog with the message text here
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text("From: Agent ${messageData['senderUsername']}"),
-        content: Text(messageData['text']),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK'),
-          )
-        ],
-      ),
-    );
+    }
   }
 
   @override

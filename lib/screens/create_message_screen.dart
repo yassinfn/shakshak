@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:geoflutterfire_plus/geoflutterfire_plus.dart';
+import 'package:geoflutterfire2/geoflutterfire2.dart';
 import 'package:geolocator/geolocator.dart';
 
 class CreateMessageScreen extends StatefulWidget {
@@ -62,7 +62,7 @@ class _CreateMessageScreenState extends State<CreateMessageScreen> {
       });
 
       final geo = GeoFlutterFire();
-      final geoPoint = GeoFirePoint(position.latitude, position.longitude);
+      final geoPoint = geo.point(latitude: position.latitude, longitude: position.longitude);
       final newTimestamp = FieldValue.serverTimestamp();
 
       await FirebaseFirestore.instance.collection('messages').add({
