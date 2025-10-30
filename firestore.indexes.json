@@ -1,0 +1,19 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "hidden_messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "location.geohash",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "location.geopoint",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
