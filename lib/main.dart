@@ -1,9 +1,9 @@
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:myapp/app_router.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:myapp/screens/profile_config_screen.dart';
+import 'package:myapp/screens/home_screen_dispatcher.dart';
 import 'firebase_options.dart';
 
 void main() async {
@@ -11,112 +11,84 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  // The AuthWrapper will handle the sign-in process and then show the app
-  runApp(const AuthWrapper());
+  runApp(const MyApp());
 }
-
-class AuthWrapper extends StatefulWidget {
-  const AuthWrapper({super.key});
-
-  @override
-  State<AuthWrapper> createState() => _AuthWrapperState();
-}
-
-class _AuthWrapperState extends State<AuthWrapper> {
-  @override
-  void initState() {
-    super.initState();
-    _signInAnonymously();
-  }
-
-  Future<void> _signInAnonymously() async {
-    try {
-      // Sign in if the user is not already signed in
-      if (FirebaseAuth.instance.currentUser == null) {
-        await FirebaseAuth.instance.signInAnonymously();
-      }
-    } catch (e) {
-      // Handle sign-in errors, maybe show a message to the user
-      debugPrint("Failed to sign in anonymously: $e");
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-        // If the user is signed in, show the main app
-        if (snapshot.connectionState == ConnectionState.active && snapshot.hasData) {
-          return const MyApp();
-        }
-
-        // While waiting for auth state, show a loading indicator
-        return const MaterialApp(
-          home: Scaffold(
-            body: Center(
-              child: CircularProgressIndicator(),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    const Color primarySeedColor = Colors.teal;
-
-    final TextTheme appTextTheme = TextTheme(
-      displayLarge: GoogleFonts.oswald(fontSize: 57, fontWeight: FontWeight.bold),
-      titleLarge: GoogleFonts.roboto(fontSize: 22, fontWeight: FontWeight.w500),
-      bodyMedium: GoogleFonts.openSans(fontSize: 14),
-      labelLarge: GoogleFonts.roboto(fontSize: 14, fontWeight: FontWeight.bold),
-    );
-
-    final ThemeData theme = ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: primarySeedColor,
-        brightness: Brightness.light,
-      ),
-      textTheme: appTextTheme,
-      appBarTheme: AppBarTheme(
-        backgroundColor: primarySeedColor,
-        foregroundColor: Colors.white,
-        titleTextStyle: GoogleFonts.oswald(fontSize: 24, fontWeight: FontWeight.bold),
-      ),
-      floatingActionButtonTheme: const FloatingActionButtonThemeData(
-        backgroundColor: primarySeedColor,
-        foregroundColor: Colors.white,
-      ),
-       listTileTheme: ListTileThemeData(
-        iconColor: primarySeedColor,
-        titleTextStyle: GoogleFonts.roboto(fontSize: 18, fontWeight: FontWeight.w500),
-        subtitleTextStyle: GoogleFonts.openSans(fontSize: 14, color: Colors.black54),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8.0),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderSide: const BorderSide(color: primarySeedColor, width: 2.0),
-          borderRadius: BorderRadius.circular(8.0),
-        ),
-        labelStyle: GoogleFonts.roboto(color: primarySeedColor),
-      ),
-    );
-
-    return MaterialApp.router(
-      routerConfig: router,
-      title: 'ShakShak App',
-      theme: theme,
+    return MaterialApp(
+      title: 'ShakShak',
       debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        primaryColor: Colors.cyan,
+        scaffoldBackgroundColor: const Color(0xFF121212),
+        textTheme: const TextTheme(
+          bodyMedium: TextStyle(color: Colors.white),
+          headlineMedium: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          headlineSmall: TextStyle(color: Colors.cyanAccent),
+        ),
+        inputDecorationTheme: const InputDecorationTheme(
+          labelStyle: TextStyle(color: Colors.white70),
+          filled: true,
+          fillColor: Colors.black54,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12.0)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12.0)),
+            borderSide: BorderSide(color: Colors.white54),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(12.0)),
+            borderSide: BorderSide(color: Colors.cyan),
+          ),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.cyan,
+            foregroundColor: Colors.black,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12.0),
+            )
+          ),
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.black26,
+          elevation: 0,
+        )
+      ),
+      home: const AuthWrapper(),
+    );
+  }
+}
+
+class AuthWrapper extends StatelessWidget {
+  const AuthWrapper({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(
+              child: CircularProgressIndicator(),
+            ),
+          );
+        }
+        if (snapshot.hasData && snapshot.data != null) {
+          // User is signed in, dispatch to the main app
+          return const HomeScreenDispatcher();
+        } else {
+          // User is not signed in, show the profile creation screen
+          return const ProfileConfigScreen();
+        }
+      },
     );
   }
 }
