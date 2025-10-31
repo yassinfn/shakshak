@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class ProfileConfigScreen extends StatefulWidget {
   const ProfileConfigScreen({super.key});
@@ -15,37 +16,90 @@ class _ProfileConfigScreenState extends State<ProfileConfigScreen> {
   final _formKey = GlobalKey<FormState>();
   bool _isLoading = false;
 
-  Future<void> _startAdventure() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
-
+  Future<void> _signInWithGoogle() async {
     setState(() {
       _isLoading = true;
     });
 
     try {
-      // 1. Sign in Anonymously
+      // Trigger the Google Sign-In flow
+      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
+      if (googleUser == null) {
+        // The user canceled the sign-in
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      // Obtain the auth details from the request
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+
+      // Create a new credential
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      // Sign in to Firebase with the credential
+      final userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
+      final user = userCredential.user;
+
+      if (user != null) {
+        // Check if user already exists in Firestore
+        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+        final docSnapshot = await userDoc.get();
+
+        if (!docSnapshot.exists) {
+          // New user, create a document for them
+          await userDoc.set({
+            'username': user.displayName ?? 'Agent_${user.uid.substring(0, 6)}',
+            'email': user.email,
+            'discoveryPoints': 0,
+            'lastMessageTimestamp': null,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+        }
+        // If the user exists, we just log them in. Their data is already there.
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to sign in with Google: ${e.toString()}')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+    // The auth state change will be picked up by the StreamBuilder in AuthWrapper
+  }
+
+  Future<void> _createAnonymousProfile() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
       final userCredential = await FirebaseAuth.instance.signInAnonymously();
       final user = userCredential.user;
 
       if (user != null) {
-        // 2. Create user document in Firestore
         await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-          'uid': user.uid,
           'username': _usernameController.text.trim(),
-          'discoveryPoints': 1,
-          'huntsCreatedToday': 0,
-          'lastHuntCreationDate': Timestamp.now(),
-          'isSharingLocation': false,
-          'detectionRadiusKm': 5,
+          'discoveryPoints': 0,
+          'lastMessageTimestamp': null,
+          'createdAt': FieldValue.serverTimestamp(),
         });
       }
     } catch (e) {
-      // Handle errors (e.g., show a snackbar)
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to start adventure: $e')),
+          SnackBar(content: Text('Failed to create profile: ${e.toString()}')),
         );
       }
     } finally {
@@ -60,47 +114,80 @@ class _ProfileConfigScreenState extends State<ProfileConfigScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          image: DecorationImage(
-            image: AssetImage('assets/images/image_e7f205.jpg'), // Radar background
-            fit: BoxFit.cover,
-          ),
-        ),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Welcome to ShakShak',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontSize: 28),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'The Secret Messenger',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(color: Colors.cyanAccent),
+              ),
+              const SizedBox(height: 60),
+
+              // Google Sign-In Button
+              ElevatedButton.icon(
+                icon: Image.asset('assets/google_logo.png', height: 24.0), // Assuming you have a logo asset
+                label: const Text('Sign in with Google'),
+                onPressed: _isLoading ? null : _signInWithGoogle,
+                style: ElevatedButton.styleFrom(
+                  foregroundColor: Colors.black,
+                  backgroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Row(
                 children: [
-                  TextFormField(
-                    controller: _usernameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Enter your Agent name',
-                      filled: true,
-                      fillColor: Colors.black54,
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Username cannot be empty';
-                      }
-                      return null;
-                    },
+                  Expanded(child: Divider(thickness: 1)),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    child: Text('OR', style: TextStyle(color: Colors.white70)),
                   ),
-                  const SizedBox(height: 20),
-                  if (_isLoading)
-                    const CircularProgressIndicator()
-                  else
-                    ElevatedButton(
-                      onPressed: _startAdventure,
-                      child: const Text('Start Adventure'),
-                    ),
+                  Expanded(child: Divider(thickness: 1)),
                 ],
               ),
-            ),
+              const SizedBox(height: 20),
+
+              // Anonymous Sign-In Form
+              Form(
+                key: _formKey,
+                child: TextFormField(
+                  controller: _usernameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Choose an anonymous Agent Name',
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Please enter a username';
+                    }
+                    if (value.length < 3) {
+                      return 'Username must be at least 3 characters';
+                    }
+                    return null;
+                  },
+                ),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _createAnonymousProfile,
+                child: const Text('Enter as an Agent'),
+              ),
+              if (_isLoading)
+                const Padding(
+                  padding: EdgeInsets.only(top: 20),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+            ],
           ),
         ),
       ),
