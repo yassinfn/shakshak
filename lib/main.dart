@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:myapp/screens/profile_config_screen.dart';
 import 'package:myapp/screens/home_screen_dispatcher.dart';
 import 'firebase_options.dart';
+import 'package:geolocator/geolocator.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -66,8 +67,32 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class AuthWrapper extends StatelessWidget {
+class AuthWrapper extends StatefulWidget {
   const AuthWrapper({super.key});
+
+  @override
+  State<AuthWrapper> createState() => _AuthWrapperState();
+}
+
+class _AuthWrapperState extends State<AuthWrapper> {
+
+  @override
+  void initState() {
+    super.initState();
+    _checkLocationPermission();
+  }
+
+  Future<void> _checkLocationPermission() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+        if (!mounted) return; // Guard against async gap
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Location permissions are required to hide and find messages.')));
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
