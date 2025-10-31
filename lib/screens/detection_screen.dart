@@ -1,10 +1,12 @@
-
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:geoflutterfire2/geoflutterfire2.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:audioplayers/audioplayers.dart';
+import 'package:myapp/models/message_model.dart';
+import 'dart:async';
+import 'dart:math';
+
+import 'package:provider/provider.dart';
+import 'package:myapp/viewmodels/user_viewmodel.dart';
 
 class DetectionScreen extends StatefulWidget {
   const DetectionScreen({super.key});
@@ -15,10 +17,9 @@ class DetectionScreen extends StatefulWidget {
 
 class _DetectionScreenState extends State<DetectionScreen> {
   Position? _currentPosition;
+  List<Message> _nearbyMessages = [];
   bool _isLoading = true;
-  String _statusMessage = 'Initializing...';
-  Stream<List<DocumentSnapshot>>? _nearbyMessagesStream;
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  StreamSubscription<Position>? _positionStream;
 
   @override
   void initState() {
@@ -26,21 +27,22 @@ class _DetectionScreenState extends State<DetectionScreen> {
     _determinePosition();
   }
 
+  @override
+  void dispose() {
+    _positionStream?.cancel();
+    super.dispose();
+  }
+
   Future<void> _determinePosition() async {
     bool serviceEnabled;
     LocationPermission permission;
 
-    setState(() {
-      _statusMessage = 'Checking location services...';
-    });
-
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      if (!mounted) return;
-      setState(() {
-        _statusMessage = 'Location services are disabled.';
-        _isLoading = false;
-      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Location services are disabled.')));
+      }
       return;
     }
 
@@ -48,115 +50,74 @@ class _DetectionScreenState extends State<DetectionScreen> {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
-        if (!mounted) return;
-        setState(() {
-          _statusMessage = 'Location permissions are denied.';
-          _isLoading = false;
-        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Location permissions are denied')));
+        }
         return;
       }
     }
 
     if (permission == LocationPermission.deniedForever) {
-      if (!mounted) return;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text(
+                'Location permissions are permanently denied, we cannot request permissions.')));
+      }
+      return;
+    }
+
+    _positionStream = Geolocator.getPositionStream().listen((Position position) {
+      if (mounted) {
+        setState(() {
+          _currentPosition = position;
+          _getNearbyMessages();
+        });
+      }
+    });
+  }
+
+  void _getNearbyMessages() async {
+    if (_currentPosition == null) return;
+    if (!mounted) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    final messagesRef = FirebaseFirestore.instance.collection('messages');
+    final center =
+        GeoPoint(_currentPosition!.latitude, _currentPosition!.longitude);
+    const radius = 500; // in meters
+
+    final lowerLat = center.latitude - (radius / 111320);
+    final upperLat = center.latitude + (radius / 111320);
+    final lowerLon =
+        center.longitude - (radius / (111320 * cos(center.latitude * pi / 180)));
+    final upperLon =
+        center.longitude + (radius / (111320 * cos(center.latitude * pi / 180)));
+
+    final snapshot = await messagesRef
+        .where('location', isGreaterThan: GeoPoint(lowerLat, lowerLon))
+        .where('location', isLessThan: GeoPoint(upperLat, upperLon))
+        .get();
+    if (!mounted) return;
+    final userViewModel = Provider.of<UserViewModel>(context, listen: false);
+    final currentUser = userViewModel.user;
+
+    final messages = snapshot.docs
+        .map((doc) => Message.fromFirestore(doc))
+        .where((message) {
+      final distance = Geolocator.distanceBetween(center.latitude,
+          center.longitude, message.location.latitude, message.location.longitude);
+      return distance <= radius && message.agentId != currentUser?.id;
+    }).toList();
+
+    if (mounted) {
       setState(() {
-        _statusMessage = 'Location permissions are permanently denied.';
+        _nearbyMessages = messages;
         _isLoading = false;
       });
-      return;
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _statusMessage = 'Fetching location...';
-    });
-
-    _currentPosition = await Geolocator.getCurrentPosition();
-    
-    if (!mounted) return;
-    setState(() {
-      _statusMessage = 'Searching for nearby messages...';
-      _searchNearbyMessages();
-      _isLoading = false;
-    });
-  }
-
-  void _searchNearbyMessages() {
-    if (_currentPosition == null) return;
-
-    final geo = GeoFlutterFire();
-    final center = geo.point(latitude: _currentPosition!.latitude, longitude: _currentPosition!.longitude);
-    final collectionReference = FirebaseFirestore.instance.collection('messages');
-
-    _nearbyMessagesStream = geo.collection(collectionRef: collectionReference).within(
-          center: center,
-          radius: 5,
-          field: 'position',
-          strictMode: true,
-        );
-  }
-
-
-  Future<void> _onMessageTapped(DocumentSnapshot message) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null || !mounted) return;
-
-    final messageData = message.data() as Map<String, dynamic>;
-    final messageId = message.id;
-    final senderId = messageData['senderId'];
-
-    if (user.uid == senderId) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("You can't collect your own message, Agent.")),
-      );
-      return;
-    }
-
-    final userRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
-
-    try {
-      await FirebaseFirestore.instance.runTransaction((transaction) async {
-        final userSnapshot = await transaction.get(userRef);
-        if (!userSnapshot.exists) {
-          throw Exception("User document does not exist!");
-        }
-
-        final discoveredMessages = List<String>.from(userSnapshot.data()!['discoveredMessages'] ?? []);
-        if (discoveredMessages.contains(messageId)) {
-          return;
-        }
-
-        transaction.update(userRef, {
-          'discoveryPoints': FieldValue.increment(10),
-          'discoveredMessages': FieldValue.arrayUnion([messageId]),
-        });
-      });
-
-      if (!mounted) return;
-      _audioPlayer.play(AssetSource('sounds/success.wav'));
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("+10 Discovery Points!")),
-      );
-
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text("From: Agent ${messageData['senderUsername']}"),
-          content: Text(messageData['text']),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            )
-          ],
-        ),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error: $error")),
-      );
     }
   }
 
@@ -164,79 +125,59 @@ class _DetectionScreenState extends State<DetectionScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Message Detection'),
+        title: const Text('Detect Messages'),
       ),
-      body: Center(
-        child: _isLoading
-            ? Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const CircularProgressIndicator(),
-                  const SizedBox(height: 16),
-                  Text(_statusMessage),
-                ],
-              )
-            : _buildDetectionUI(),
-      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _nearbyMessages.isEmpty
+              ? const Center(child: Text('No messages found nearby.'))
+              : ListView.builder(
+                  itemCount: _nearbyMessages.length,
+                  itemBuilder: (context, index) {
+                    final message = _nearbyMessages[index];
+                    return ListTile(
+                      title: Text(message.text),
+                      subtitle: Text('From agent ${message.agentId}'),
+                      onTap: () => _handleMessageTapped(message),
+                    );
+                  },
+                ),
     );
   }
 
-  Widget _buildDetectionUI() {
-    if (_currentPosition == null) {
-      return Text(_statusMessage);
-    }
+  void _handleMessageTapped(Message message) {
+    final userViewModel = Provider.of<UserViewModel>(context, listen: false);
+    final currentUser = userViewModel.user;
 
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Text(
-            'Current Location: (${_currentPosition!.latitude.toStringAsFixed(4)}, ${_currentPosition!.longitude.toStringAsFixed(4)})',
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-        ),
-        Expanded(
-          child: StreamBuilder<List<DocumentSnapshot>>(
-            stream: _nearbyMessagesStream,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                return const Center(
-                  child: Text('No messages found within 5km. The area is clear, Agent.'),
-                );
-              }
+    if (currentUser != null) {
+      // Prevent user from getting points for their own messages
+      if (message.agentId != currentUser.id) {
+        // Add discovery points
+        currentUser.discoveryPoints += 10;
+        userViewModel.updateUser(currentUser);
 
-              final messages = snapshot.data!;
-              final currentUser = FirebaseAuth.instance.currentUser;
-
-              return ListView.builder(
-                itemCount: messages.length,
-                itemBuilder: (context, index) {
-                  final message = messages[index];
-                  final messageData = message.data() as Map<String, dynamic>;
-
-                  final bool isOwnMessage = currentUser?.uid == messageData['senderId'];
-
-                  return ListTile(
-                    leading: Icon(isOwnMessage ? Icons.adjust : Icons.message),
-                    title: Text(messageData['text'] ?? 'No text'),
-                    subtitle: Text('From: Agent ${messageData['senderUsername']}'),
-                    onTap: () => _onMessageTapped(message),
-                  );
+        // Delete the message after it has been discovered
+        FirebaseFirestore.instance.collection('messages').doc(message.id).delete();
+        if (!mounted) return;
+        // Show a confirmation dialog
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Message Discovered!'),
+            content: const Text('You have earned 10 discovery points.'),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  // Refresh the message list
+                  _getNearbyMessages();
                 },
-              );
-            },
+                child: const Text('OK'),
+              ),
+            ],
           ),
-        ),
-      ],
-    );
+        );
+      }
+    }
   }
-    @override
-  void dispose() {
-    _audioPlayer.dispose();
-    super.dispose();
-  }
-
 }
